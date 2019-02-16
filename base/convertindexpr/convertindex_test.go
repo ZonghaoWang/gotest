@@ -1,4 +1,4 @@
-package convertindex
+package convertindexpr
 
 import (
 	"fmt"
@@ -9,6 +9,12 @@ import (
 )
 
 
+var request = &Request{
+	Offset: 1,
+	Limit:	100,
+	Match:	"1,2,3",
+	Index:	Credit,
+}
 
 func ChangeProfile(profile *Profile) *Profile {
 	if rand.Int63n(10) >= 4 {
@@ -51,7 +57,7 @@ func (sp *SuperProfile) CURDProfiles()  {
 	var flag int
 	for {
 		flag++
-		if flag > 100000 {
+		if flag > 200000 {
 			break
 		}
 		profile := GetmockProfile()
@@ -67,9 +73,16 @@ func (sp *SuperProfile) CURDProfiles()  {
 			delete(sp.memory.Profiles, profile.ProfileID)
 			sp.memory.Unlock()
 		}
+
 		//fmt.Printf("before profiel is %v\n", profile)
 		cacheBefor := CacheFeature(profile)
 		afterProfile := ChangeProfile(profile)
+		// 如果beforeProfile为空, afterProfile 不是nil但是afterProfile又在memory里面，则将其置为nil
+		if cacheBefor.ProfilePtr == nil && afterProfile != nil && sp.memory.Profiles[afterProfile.ProfileID] != nil {
+			afterProfile = nil
+		}
+
+
 		//fmt.Printf("after profile is %v\n", afterProfile)
 		if afterProfile != nil {
 			sp.memory.Lock()
@@ -82,7 +95,6 @@ func (sp *SuperProfile) CURDProfiles()  {
 		sp.invertIndex.Lock()
 		sp.invertIndex.Update(cacheBefor, cacheAfter)
 		sp.invertIndex.Unlock()
-		time.Sleep(time.Microsecond)
 	}
 }
 
@@ -91,14 +103,17 @@ func BenchmarkSearch1(b *testing.B) {
 	sp := SuperProfile{
 		memory:      &Memory{},
 		invertIndex: &InvertIndex{},
+		requestCache: &RequestCache{},
 	}
 	sp.Init()
-	//go sp.CURDProfiles()
-	//time.Sleep(time.Second * 4)
+	go sp.CURDProfiles()
+	time.Sleep(time.Second * 4)
 	fmt.Println("length of profiles is ", len(sp.memory.Profiles))
+	profiles, length := sp.SearchByInfo(request)
+	fmt.Printf("length of resut is %d and total is %d\n", len(profiles), length)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		fmt.Println("length of result is ,", len(sp.SearchByInfo(Credit)))
+		sp.SearchByInfo(request)
 	}
 }
 
@@ -106,14 +121,17 @@ func BenchmarkSearch2(b *testing.B) {
 	sp := &SuperProfile{
 		memory:      &Memory{},
 		invertIndex: &InvertIndex{},
+		requestCache: &RequestCache{},
 	}
 	sp.Init()
-	//go sp.CURDProfiles()
-	//time.Sleep(time.Second * 4)
+	go sp.CURDProfiles()
+	time.Sleep(time.Second * 4)
 	fmt.Println("length of profiles is ", len(sp.memory.Profiles))
+	profiles, length := sp.SearchByInfoIndex(request)
+	fmt.Printf("length of resut is %d and total is %d\n", len(profiles), length)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		fmt.Println("length of result is ,", len(sp.SearchByInfoIndex(Credit)))
+		sp.SearchByInfoIndex(request)
 	}
 }
 
@@ -121,19 +139,20 @@ func TestTwoSearch(t *testing.T)  {
 	sp := &SuperProfile{
 		memory:      &Memory{},
 		invertIndex: &InvertIndex{},
+		requestCache: &RequestCache{},
 	}
 	sp.Init()
 	go sp.CURDProfiles()
 	time.Sleep(time.Second * 2)
 	fmt.Println("length of memory is ", len(sp.memory.Profiles))
-	profiles0 := sp.SearchByInfo(Credit)
+	profiles0, _ := sp.SearchByInfo(request)
 	fmt.Println("length of profiles0 is ", len(profiles0))
 	idSet0 := make(map[string]bool)
 	for _, p := range profiles0 {
 		idSet0[p.ProfileID] = true
 	}
 	fmt.Println("len of idset0 is ", len(idSet0))
-	profiles := sp.SearchByInfoIndex(Credit)
+	profiles, _ := sp.SearchByInfoIndex(request)
 	idSet := make(map[string]bool)
 	for _, p := range profiles {
 		if idSet0[p.ProfileID] == false {
@@ -156,11 +175,6 @@ func TestTwoSearch(t *testing.T)  {
 	}
 
 
-	for pid, _ := range sp.memory.Profiles {
-		if idSet[pid] == false {
-			fmt.Printf("not in memory %s\n", pid)
-		}
-	}
 
 	fmt.Println("length of set is ", len(profiles))
 	fmt.Println("length of set is ", len(idSet))
